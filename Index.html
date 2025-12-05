@@ -264,11 +264,8 @@
 
             // 地址處理：自動過濾 "鄰" 與 "里/村"
             let rawAddress = findVal("居住(通訊)地址");
-            // 1. 移除 "數字+鄰"
             let cleanAddress = rawAddress.replace(/\d+鄰/g, '');
-            // 2. 嘗試移除 "里" 或 "村" (簡單過濾：移除 XX里 或 XX村)
             cleanAddress = cleanAddress.replace(/(\S+?[里村])(?=[^縣市區鄉鎮]|$)/g, ''); 
-            // 策略：刪除 "鄰"，刪除 "里"
             cleanAddress = rawAddress.replace(/\d+鄰/g, '').replace(/\S+[里村]/g, (match) => {
                 return ""; 
             });
@@ -277,25 +274,41 @@
             let name_f = findVal("主要聯絡人姓名") || findVal("代理人姓名") || findVal("聯絡人姓名");
             let phone_f = findVal("聯絡人手機") || findVal("代理人手機");
 
-            // 金額與身分
-            const headers = Array.from(doc.querySelectorAll('th'));
-            const getAmount = (key) => {
-                const h = headers.find(th => th.innerText.includes(key));
-                if (h && h.nextElementSibling) {
-                    const text = h.nextElementSibling.innerText;
-                    if (key === "民眾部份負擔") {
-                         const match = text.match(/民眾部份負擔：\s*(\d+元(?:\(\d+%\))?)/);
-                         return match ? match[1] : "0";
-                    }
-                    const match = text.match(/給付額度：(\d+)/);
-                    return match ? match[1] : "0";
-                }
-                return "0";
-            };
+            // 金額與身分處理 (修正邏輯)
+            let BA = "0";
+            let GA = "0";
+            let part = "0";
 
-            const BA = getAmount("照顧及專業服務");
-            const GA = getAmount("喘息服務");
-            const part = getAmount("民眾部份負擔"); // 改用特定 key 抓取
+            const headers = Array.from(doc.querySelectorAll('th'));
+
+            // 1. 抓取 [照顧及專業服務] 區塊 (包含 B碼額度 和 民眾部份負擔)
+            const bHeader = headers.find(th => th.innerText.includes("照顧及專業服務"));
+            if (bHeader && bHeader.nextElementSibling) {
+                const text = bHeader.nextElementSibling.innerText;
+                
+                // 抓取 BA 額度
+                const matchBA = text.match(/給付額度[：:]\s*(\d+)/);
+                if (matchBA) BA = matchBA[1];
+
+                // 抓取 部分負擔 (修正：從同一格文字中抓取)
+                // 嘗試抓取完整格式：數字元(16%)
+                const matchPart = text.match(/民眾部份負擔[：:]\s*([0-9,]+元(?:\s*[(\uff08].*?[)\uff09])?)/);
+                if (matchPart) {
+                    part = matchPart[1];
+                } else {
+                    // Fallback: 只抓數字
+                    const matchPartNum = text.match(/民眾部份負擔[：:]\s*([0-9,]+)/);
+                    if (matchPartNum) part = matchPartNum[1];
+                }
+            }
+
+            // 2. 抓取 [喘息服務] 區塊 (G碼額度)
+            const gHeader = headers.find(th => th.innerText.includes("喘息服務"));
+            if (gHeader && gHeader.nextElementSibling) {
+                const text = gHeader.nextElementSibling.innerText;
+                const matchGA = text.match(/給付額度[：:]\s*(\d+)/);
+                if (matchGA) GA = matchGA[1];
+            }
 
             // 費率判斷
             const welfareRow = findVal("長照福利身份");
@@ -306,7 +319,7 @@
             // 填入 UI (可編輯區)
             document.getElementById('name_o').value = name_o;
             document.getElementById('Code_o').value = code_o;
-            document.getElementById('address_live').value = cleanAddress; // 填入過濾後的地址
+            document.getElementById('address_live').value = cleanAddress;
             document.getElementById('name_f').value = name_f;
             document.getElementById('Phone_f').value = phone_f;
 
@@ -339,12 +352,14 @@
                 if (cells.length >= 4) {
                     const codeRaw = cells[1].innerText.trim(); // "BA13[陪同外出]"
                     
-                    // --- 修改開始: 依照需求格式化服務項目名稱 ---
+                    // --- 關鍵修正：確保移除後方多餘括號，保留完整中文名稱 ---
                     // 目標: "BA13[陪同外出]" -> "BA13陪同外出"
-                    let code = codeRaw.split('[')[0]; // 預設 fallback
+                    // 目標: "BA14[陪同就醫](10712)" -> "BA14陪同就醫"
+                    
+                    let code = codeRaw.split('[')[0]; // Fallback
                     const nameMatch = codeRaw.match(/^([A-Za-z0-9]+)\[([^\]]+)\]/);
                     if (nameMatch) {
-                        // 格式: BA13 + 陪同外出 -> BA13陪同外出
+                        // 格式: BA13 + 陪同外出 -> BA13陪同外出 (自動忽略後面的 (10712))
                         code = nameMatch[1] + nameMatch[2];
                     }
                     // --- 修改結束 ---
